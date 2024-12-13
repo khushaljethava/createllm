@@ -8,7 +8,7 @@ import unittest
 from createllm import createllm
 
 
-class Testcreatellm(unittest.TestCase):
+class TestCreatellm(unittest.TestCase):
     """Tests for `createllm` package."""
 
     def setUp(self):
