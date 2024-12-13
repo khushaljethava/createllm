@@ -5,334 +5,319 @@ import os
 import torchvision.transforms as transforms
 import dill as pickle
 import json
+import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from typing import Tuple, List, Dict, Optional
+from dataclasses import dataclass
+from tqdm import tqdm
 
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
+# Set device and seed for reproducibility
 torch.manual_seed(1337)
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# class EstimatedLossOfData:
-
-
+@dataclass
+class ModelConfig:
+    """Configuration class for GPT model parameters"""
+    vocab_size: int
+    n_embd: int = 384
+    block_size: int = 256
+    n_layer: int = 4
+    n_head: int = 4
+    dropout: float = 0.2
 
 class TextFileProcessor:
-    def __init__(self, file_path):
+    """Handles text file processing and tokenization for GPT model training"""
+    
+    def __init__(self, file_path: str):
+        """
+        Initialize the text processor
+        
+        Args:
+            file_path: Path to the input text file
+        """
         self.file_path = file_path
+        self.chars = None
+        self.vocab_size = None
+        self.stoi = None
+        self.itos = None
 
-    def read_file(self):
+    def read_file(self) -> Optional[str]:
+        """Read and return file content with proper error handling"""
         try:
             with open(self.file_path, 'r', encoding='utf-8') as file:
                 text = file.read()
+            logger.info(f"Successfully read file: {self.file_path}")
             return text
         except FileNotFoundError:
-            print(f"File '{self.file_path}' not found.")
+            logger.error(f"File not found: {self.file_path}")
+            return None
+        except Exception as e:
+            logger.error(f"Error reading file: {str(e)}")
             return None
 
-    def process_text(self, text):
-        # Implement your text processing logic here
-        chars = sorted(list(set(text)))
-        vocab_size = len(chars)
+    def process_text(self, text: str) -> Tuple[torch.Tensor, torch.Tensor, int, callable, callable]:
+        """
+        Process text data for model training
+        
+        Args:
+            text: Input text to process
+            
+        Returns:
+            Tuple containing:
+            - Training data tensor
+            - Validation data tensor
+            - Vocabulary size
+            - Encoding function
+            - Decoding function
+        """
+        self.chars = sorted(list(set(text)))
+        self.vocab_size = len(self.chars)
+        
+        # Create character mappings
+        self.stoi = {ch: i for i, ch in enumerate(self.chars)}
+        self.itos = {i: ch for i, ch in enumerate(self.chars)}
 
-        # create a mapping from characters to integers
-        stoi = { ch:i for i,ch in enumerate(chars) }
-        itos = { i:ch for i,ch in enumerate(chars) }
+        # Create encoding and decoding transforms
+        encode = transforms.Compose([
+            transforms.Lambda(lambda s: [self.stoi.get(c, 0) for c in s])
+        ])
+        decode = transforms.Compose([
+            transforms.Lambda(lambda l: ''.join([self.itos.get(i, '') for i in l]))
+        ])
 
-        encode = transforms.Compose([transforms.Lambda(lambda s: [stoi[c] for c in s])])
-        decode = transforms.Compose([transforms.Lambda(lambda l: ''.join([itos[i] for i in l]))])
-        # encode = lambda s: [stoi[c] for c in s] # encoder: take a string, output a list of integers
-        # decode = lambda l: ''.join([itos[i] for i in l]) # decoder: take a list of integers, output a string
-        # Train and test splits
+        # Prepare data splits
         data = torch.tensor(encode(text), dtype=torch.long)
-        n = int(0.9*len(data)) # first 90% will be train, rest val
+        n = int(0.9 * len(data))
         train_data = data[:n]
         val_data = data[n:]
-        return train_data,val_data,vocab_size,encode,decode
+        
+        return train_data, val_data, self.vocab_size, encode, decode
 
-class Head(nn.Module):
-    """ one head of self-attention """
-
-    def __init__(self, head_size,n_embd,block_size,dropout):
-        super().__init__()
-        self.key = nn.Linear(n_embd, head_size, bias=False)
-        self.query = nn.Linear(n_embd, head_size, bias=False)
-        self.value = nn.Linear(n_embd, head_size, bias=False)
-        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
-
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x):
-        # input of size (batch, time-step, channels)
-        # output of size (batch, time-step, head size)
-        B,T,C = x.shape
-        k = self.key(x)   # (B,T,hs)
-        q = self.query(x) # (B,T,hs)
-        # compute attention scores ("affinities")
-        wei = q @ k.transpose(-2,-1) * k.shape[-1]**-0.5 # (B, T, hs) @ (B, hs, T) -> (B, T, T)
-        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # (B, T, T)
-        wei = F.softmax(wei, dim=-1) # (B, T, T)
-        wei = self.dropout(wei)
-        # perform the weighted aggregation of the values
-        v = self.value(x) # (B,T,hs)
-        out = wei @ v # (B, T, T) @ (B, T, hs) -> (B, T, hs)
-        return out
-
-class MultiHeadAttention(nn.Module):
-    """ multiple heads of self-attention in parallel """
-
-    def __init__(self, num_heads, head_size,n_embd,block_size,dropout):
-        super().__init__()
-        self.heads = nn.ModuleList([Head(head_size,n_embd,block_size,dropout=dropout) for _ in range(num_heads)])
-        self.proj = nn.Linear(head_size * num_heads, n_embd)
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x):
-        out = torch.cat([h(x) for h in self.heads], dim=-1)
-        out = self.dropout(self.proj(out))
-        return out
-
-class FeedFoward(nn.Module):
-    """ a simple linear layer followed by a non-linearity """
-
-    def __init__(self, n_embd,dropout):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(n_embd, 4 * n_embd),
-            nn.ReLU(),
-            nn.Linear(4 * n_embd, n_embd),
-            nn.Dropout(dropout),
-        )
-
-    def forward(self, x):
-        return self.net(x)
-
-class Block(nn.Module):
-    """ Transformer block: communication followed by computation """
-
-    def __init__(self, n_embd, n_head,block_size,dropout):
-        # n_embd: embedding dimension, n_head: the number of heads we'd like
-        super().__init__()
-        head_size = n_embd // n_head
-        self.sa = MultiHeadAttention(n_head, head_size,n_embd,block_size,dropout=dropout)
-        self.ffwd = FeedFoward(n_embd,dropout)
-        self.ln1 = nn.LayerNorm(n_embd)
-        self.ln2 = nn.LayerNorm(n_embd)
-
-    def forward(self, x):
-        x = x + self.sa(self.ln1(x))
-        x = x + self.ffwd(self.ln2(x))
-        return x
-
-class GPTLanguageModel(nn.Module):
-
-    def __init__(self,vocab_size,n_embd = 384,block_size= 256,n_layer = 4,n_head = 4 ,dropout=0.2):
-        super().__init__()
-        # each token directly reads off the logits for the next token from a lookup table
-        self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
-        self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        self.blocks = nn.Sequential(*[Block(n_embd, n_head=n_head,block_size=block_size,dropout=dropout) for _ in range(n_layer)])
-        self.ln_f = nn.LayerNorm(n_embd) # final layer norm
-        self.lm_head = nn.Linear(n_embd, vocab_size)
-
-        # better init, not covered in the original GPT video, but important, will cover in followup video
-        self.apply(self._init_weights)
-
-    def _init_weights(self, module):
-        if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-            if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-
-    def forward(self, idx, targets=None):
-        B, T = idx.shape
-
-        # idx and targets are both (B,T) tensor of integers
-        tok_emb = self.token_embedding_table(idx) # (B,T,C)
-        pos_emb = self.position_embedding_table(torch.arange(T, device=device)) # (T,C)
-        x = tok_emb + pos_emb # (B,T,C)
-        x = self.blocks(x) # (B,T,C)
-        x = self.ln_f(x) # (B,T,C)
-        logits = self.lm_head(x) # (B,T,vocab_size)
-
-        if targets is None:
-            loss = None
-        else:
-            B, T, C = logits.shape
-            logits = logits.view(B*T, C)
-            targets = targets.view(B*T)
-            loss = F.cross_entropy(logits, targets)
-
-        return logits, loss
-
-    def generate(self, idx, max_new_tokens,block_size=256):
-        # idx is (B, T) array of indices in the current context
-        for _ in range(max_new_tokens):
-            # crop idx to the last block_size tokens
-            idx_cond = idx[:, -block_size:]
-            # get the predictions
-            logits, loss = self(idx_cond)
-            # focus only on the last time step
-            logits = logits[:, -1, :] # becomes (B, C)
-            # apply softmax to get probabilities
-            probs = F.softmax(logits, dim=-1) # (B, C)
-            # sample from the distribution
-            idx_next = torch.multinomial(probs, num_samples=1) # (B, 1)
-            # append sampled index to the running sequence
-            idx = torch.cat((idx, idx_next), dim=1) # (B, T+1)
-        return idx
-  
-class LLMModel:
-
-  def __init__(self,Path):
-    if not os.path.exists(Path):
-        print("Folder does not exist.")
-    else:
-        # Initialize variables to store the loaded data
-        decoder_data = None
-        model_data = None
-        encoder_data = None
-        config_data = None
-
-        # Load 'config.json' file first
-        config_file_path = os.path.join(Path, 'config.json')
-        if os.path.exists(config_file_path):
-            with open(config_file_path, 'r') as config_file:
-                config_data = json.load(config_file)
-        else:
-            print("config.json file not found.")
-
-        # Then load the other expected files
-        expected_files = ['decoder.pickle', 'model.pt', 'encoder.pickle']
-        for file_name in expected_files:
-            file_path = os.path.join(Path, file_name)
-
-            # Check if the file exists
-            if os.path.exists(file_path):
-                if file_name.endswith('.pickle'):
-                    # Load pickle files
-                    with open(file_path, 'rb') as file:
-                        if file_name == 'decoder.pickle':
-                            decoder_data = pickle.load(file)
-                        elif file_name == 'encoder.pickle':
-                            encoder_data = pickle.load(file)
-                elif file_name == 'model.pt':
-                    # Handle the model.pt file as needed
-                    # You may use PyTorch's torch.load() function here
-                    model = GPTLanguageModel(vocab_size=config_data["vocab_size"],n_embd = config_data["n_embd"],block_size = config_data["block_size"],n_layer=config_data["n_layer"],n_head=config_data["n_head"],dropout=config_data["dropout"])
-                    model.load_state_dict(torch.load(file_path,map_location=device))
-                    model = model.to(device)
-            else:
-                print(f"File not found: {file_name}")
- 
-  def generate(self,TextInput):
-      context = torch.tensor(encoder_data(TextInput), dtype=torch.long, device=device)
-      generated_chars = decoder_data(model.generate(context.unsqueeze(0), max_new_tokens=150)[0].tolist())
-      return generated_chars
-
-
-class GPTTrainer:
-    def __init__(self,TextFile,learning_rate=3e-4,batch_size = 64,block_size = 256, max_iters = 5000, eval_interval = 500,eval_iters = 200,n_embd = 384,
-    n_head = 8, n_layer = 8,dropout = 0.2,SavedPath=""):
-        self.TextFile = TextFile
-        self.learning_rate = learning_rate
+class ThreadedDataLoader:
+    """Handles multi-threaded data loading and batch preparation"""
+    
+    def __init__(self, batch_size: int, block_size: int, num_workers: int = 4):
         self.batch_size = batch_size
         self.block_size = block_size
+        self.num_workers = num_workers
+        self.executor = ThreadPoolExecutor(max_workers=num_workers)
+
+    def get_batch(self, split: str, train_data: torch.Tensor, val_data: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Get a batch of data using multiple threads"""
+        data = train_data if split == 'train' else val_data
+        futures = []
+        
+        for _ in range(self.batch_size):
+            futures.append(self.executor.submit(self._get_single_item, data))
+            
+        x_list = []
+        y_list = []
+        for future in futures:
+            x, y = future.result()
+            x_list.append(x)
+            y_list.append(y)
+            
+        x = torch.stack(x_list).to(device)
+        y = torch.stack(y_list).to(device)
+        return x, y
+
+    def _get_single_item(self, data: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Get a single training item"""
+        i = torch.randint(len(data) - self.block_size, (1,)).item()
+        x = data[i:i + self.block_size]
+        y = data[i + 1:i + self.block_size + 1]
+        return x, y
+
+class GPTLanguageModel(nn.Module):
+    """Enhanced GPT Language Model with improved architecture"""
+
+    def __init__(self, config: ModelConfig):
+        super().__init__()
+        self.config = config
+        
+        # Embeddings
+        self.token_embedding_table = nn.Embedding(config.vocab_size, config.n_embd)
+        self.position_embedding_table = nn.Embedding(config.block_size, config.n_embd)
+        
+        # Transformer blocks
+        self.blocks = nn.ModuleList([
+            Block(config.n_embd, config.n_head, config.block_size, config.dropout)
+            for _ in range(config.n_layer)
+        ])
+        
+        # Output layers
+        self.ln_f = nn.LayerNorm(config.n_embd)
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size)
+        
+        # Initialize weights
+        self.apply(self._init_weights)
+        
+        # Calculate number of parameters
+        self.n_params = sum(p.numel() for p in self.parameters())
+        logger.info(f"Number of parameters: {self.n_params/1e6:.2f}M")
+
+    def _init_weights(self, module):
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if isinstance(module, nn.Linear) and module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+
+    def forward(self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """Forward pass with improved attention mechanism"""
+        B, T = idx.shape
+        
+        # Get embeddings
+        tok_emb = self.token_embedding_table(idx)
+        pos_emb = self.position_embedding_table(torch.arange(T, device=device))
+        x = tok_emb + pos_emb
+        
+        # Apply transformer blocks with residual connections
+        for block in self.blocks:
+            x = block(x)
+        
+        x = self.ln_f(x)
+        logits = self.lm_head(x)
+        
+        # Calculate loss if targets provided
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+            
+        return logits, loss
+
+    @torch.no_grad()
+    def generate(self, idx: torch.Tensor, max_new_tokens: int, temperature: float = 1.0) -> torch.Tensor:
+        """Generate text with temperature-based sampling"""
+        for _ in tqdm(range(max_new_tokens), desc="Generating"):
+            # Get predictions
+            idx_cond = idx[:, -self.config.block_size:]
+            logits, _ = self(idx_cond)
+            logits = logits[:, -1, :] / temperature
+            
+            # Sample from the distribution
+            probs = F.softmax(logits, dim=-1)
+            idx_next = torch.multinomial(probs, num_samples=1)
+            
+            # Append new token
+            idx = torch.cat((idx, idx_next), dim=1)
+            
+        return idx
+
+class ModelManager:
+    """Handles model saving and loading operations"""
+    
+    @staticmethod
+    def save_model(model: GPTLanguageModel, path: str, encode: callable, decode: callable):
+        """Save model and associated data"""
+        os.makedirs(path, exist_ok=True)
+        
+        # Save model state
+        torch.save(model.state_dict(), os.path.join(path, "model.pt"))
+        
+        # Save encoder and decoder
+        with open(os.path.join(path, "encoder.pickle"), "wb") as f:
+            pickle.dump(encode, f, protocol=pickle.HIGHEST_PROTOCOL)
+        with open(os.path.join(path, "decoder.pickle"), "wb") as f:
+            pickle.dump(decode, f, protocol=pickle.HIGHEST_PROTOCOL)
+            
+        # Save config
+        config = {
+            "vocab_size": model.config.vocab_size,
+            "n_embd": model.config.n_embd,
+            "block_size": model.config.block_size,
+            "n_layer": model.config.n_layer,
+            "n_head": model.config.n_head,
+            "dropout": model.config.dropout
+        }
+        with open(os.path.join(path, "config.json"), "w") as f:
+            json.dump(config, f)
+            
+        logger.info(f"Model saved successfully at: {path}")
+
+    @staticmethod
+    def load_model(path: str) -> Tuple[GPTLanguageModel, callable, callable]:
+        """Load model and associated data"""
+        # Load config
+        with open(os.path.join(path, "config.json"), "r") as f:
+            config = json.load(f)
+        
+        # Create and load model
+        model = GPTLanguageModel(ModelConfig(**config))
+        model.load_state_dict(torch.load(os.path.join(path, "model.pt"), map_location=device))
+        
+        # Load encoder and decoder
+        with open(os.path.join(path, "encoder.pickle"), "rb") as f:
+            encode = pickle.load(f)
+        with open(os.path.join(path, "decoder.pickle"), "rb") as f:
+            decode = pickle.load(f)
+            
+        return model, encode, decode
+
+class GPTTrainer:
+    """Enhanced trainer with multi-threading support and progress tracking"""
+    
+    def __init__(self, config: ModelConfig, learning_rate: float = 3e-4,
+                 batch_size: int = 64, max_iters: int = 5000,
+                 eval_interval: int = 500, eval_iters: int = 200,
+                 num_workers: int = 4):
+        self.config = config
+        self.learning_rate = learning_rate
+        self.batch_size = batch_size
         self.max_iters = max_iters
         self.eval_interval = eval_interval
         self.eval_iters = eval_iters
-        self.n_embd = n_embd
-        self.n_head  = n_head
-        self.n_layer = n_layer
-        self.dropout = dropout
-        self.SavedPath = SavedPath
+        self.data_loader = ThreadedDataLoader(batch_size, config.block_size, num_workers)
 
-    def get_batch(self,split,train_data,val_data,block_size,batch_size):
-        # generate a small batch of data of inputs x and targets y
-        data = train_data if split == 'train' else val_data
-        ix = torch.randint(len(data) - block_size, (batch_size,))
-        x = torch.stack([data[i:i+block_size] for i in ix])
-        y = torch.stack([data[i+1:i+block_size+1] for i in ix])
-        x, y = x.to(device), y.to(device)
-        return x, y
-
-    @torch.no_grad()
-    def estimate_loss(self,model,eval_iters,train_data,val_data,block_size,batch_size):
-        out = {}
-        model.eval()
-        for split in ['train', 'val']:
-            losses = torch.zeros(eval_iters)
-            for k in range(eval_iters):
-                X, Y = self.get_batch(split,train_data,val_data,block_size,batch_size)
-                # print(X)
-                logits, loss = model(X, Y)
-                # print(logits)
-                # print()
-                losses[k] = loss.item()
-            out[split] = losses.mean()
-        model.train()
-        return  out
-
-    def SaveCreateLLmModel(self,model,path,encode,decode,configData):
-
-      #save GPT model
-      # Define the directory path
-      directory_path = str(os.path.join(path,'CreateLLMModel'))
-      # Check if the directory exists
-      if not os.path.exists(directory_path):
-          # If it doesn't exist, create it
-          os.makedirs(directory_path)
-          print(f"Directory '{directory_path}' created.")
-      else:
-          print(f"Directory '{directory_path}' already exists.")
-
-      #GPT Model Saved
-      torch.save(model.state_dict(), os.path.join(directory_path,"model.pt"))
-
-      #save encoder
-      encoder_file_path = str(os.path.join(path,'CreateLLMModel','encoder.pickle'))
-
-      with open(encoder_file_path, 'wb') as file:
-          pickle.dump(encode, file,pickle.HIGHEST_PROTOCOL)
-      #save decoder
-      decoder_file_path = str(os.path.join(path,'CreateLLMModel','decoder.pickle'))
-      # Save the encoder to the file
-      with open(decoder_file_path, 'wb') as file:
-          pickle.dump(decode, file,pickle.HIGHEST_PROTOCOL)
-
-
-      config_file_path = str(os.path.join(path,'CreateLLMModel','config.json'))
-      with open(config_file_path, 'w') as file:
-          json.dump(configData, file)
-      # print(f"Model Saved at {path}")
-
-
-    def trainer(self):
-
-        DataFile = TextFileProcessor(self.TextFile)
-        text = DataFile.read_file()
-        if text:
-            train_data,val_data,vocab_size,encode,decode = DataFile.process_text(text)
-        model = GPTLanguageModel(vocab_size,self.n_embd,self.block_size,self.n_layer,self.n_head,self.dropout)
-        m = model.to(device)
-        print(sum(p.numel() for p in m.parameters())/1e6, 'Million Parameters')
+    def train(self, train_data: torch.Tensor, val_data: torch.Tensor) -> GPTLanguageModel:
+        """Train the model with progress tracking and logging"""
+        model = GPTLanguageModel(self.config).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=self.learning_rate)
-        # create a PyTorch optimizer
-        for iter in range(self.max_iters):
-            # every once in a while evaluate the loss on train and val sets
-            if iter % self.eval_interval == 0 or iter == self.max_iters - 1:
-                # est_loss = EstimatedLossOfData()
-                losses = self.estimate_loss(m,self.eval_iters,train_data,val_data,self.block_size,self.batch_size)
-                print(f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-            # sample a batch of data
-            xb, yb = self.get_batch('train',train_data,val_data,self.block_size,self.batch_size)
-
-            # evaluate the loss
+        
+        progress_bar = tqdm(range(self.max_iters), desc="Training")
+        for iter_num in progress_bar:
+            # Evaluation
+            if iter_num % self.eval_interval == 0:
+                losses = self._evaluate_model(model, train_data, val_data)
+                progress_bar.set_postfix({
+                    'train_loss': f"{losses['train']:.4f}",
+                    'val_loss': f"{losses['val']:.4f}"
+                })
+            
+            # Training step
+            xb, yb = self.data_loader.get_batch('train', train_data, val_data)
             logits, loss = model(xb, yb)
+            
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
-        configData = {"vocab_size":vocab_size,"n_embd":self.n_embd,"block_size":self.block_size,"n_layer":self.n_layer,"n_head":self.n_head,"dropout":self.dropout}
-        self.SaveCreateLLmModel(m,self.SavedPath,encode,decode,configData)
-        print("Model Trained Successfully")
+            
+        return model
 
+    @torch.no_grad()
+    def _evaluate_model(self, model: GPTLanguageModel, train_data: torch.Tensor,
+                       val_data: torch.Tensor) -> Dict[str, float]:
+        """Evaluate model on training and validation sets"""
+        model.eval()
+        losses = {}
+        
+        for split in ['train', 'val']:
+            losses[split] = torch.mean(torch.tensor([
+                self._compute_loss(model, split, train_data, val_data)
+                for _ in range(self.eval_iters)
+            ])).item()
+            
+        model.train()
+        return losses
+
+    def _compute_loss(self, model: GPTLanguageModel, split: str,
+                     train_data: torch.Tensor, val_data: torch.Tensor) -> float:
+        """Compute loss for a single batch"""
+        x, y = self.data_loader.get_batch(split, train_data, val_data)
+        _, loss = model(x, y)
+        return loss.item()
 
