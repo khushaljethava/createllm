@@ -1,24 +1,24 @@
 # createllm
 
-A Python package that enables users to create and train their own Language Models (LLMs) from scratch using custom datasets. This package provides a streamlined approach to building, training, and deploying custom language models tailored to specific domains or use cases.
+A Python package that enables users to create and train their own Language Learning Models (LLMs) from scratch using custom datasets. This package provides a simplified approach to building, training, and deploying custom language models tailored to specific domains or use cases.
 
 ## 🎯 Core Purpose
 
 createllm allows you to:
 - Train custom language models on your specific text data
 - Create domain-specific LLMs for specialized applications
-- Build and experiment with configurable model architectures
+- Build and experiment with different model architectures
 - Deploy trained models for text generation tasks
 
 ## ✨ Key Features
 
 - 🔨 Build LLMs from scratch using your own text data
-- 🚀 Efficient training pipelines with PyTorch
+- 🚀 Multi-threaded training for faster model development
 - 📊 Real-time training progress tracking
-- 🎛️ Flexible model configuration
-- 💾 Simple model saving and loading
+- 🎛️ Configurable model architecture
+- 💾 Easy model saving and loading
 - 🎯 Custom text generation capabilities
-- 📈 Built-in validation and performance monitoring
+- 📈 Built-in performance monitoring
 
 ## 📋 Requirements
 
@@ -43,95 +43,74 @@ my_training_data.txt
 ### 2. Train Your Custom LLM
 
 ```python
-from createllm import ModelConfig, Trainer, TextFileProcessor
+from createllm import ModelConfig, GPTTrainer, TextFileProcessor
 
-# Step 1: Initialize model configuration
+# Initialize model configuration
 config = ModelConfig(
-    vocab_size=None,  # Will be determined based on your data
+    vocab_size=None,  # Will be automatically set based on your data
     n_embd=384,      # Embedding dimension
     block_size=256,  # Context window size
     n_layer=4,       # Number of transformer layers
-    n_head=4         # Number of attention heads
+    n_head=4        # Number of attention heads
 )
 
-# Step 2: Process text and create trainer instance
-processor = TextFileProcessor("path/to/my_training_data.txt")
-text = processor.read_file()
-train_data, val_data, vocab_size, encode, decode = processor.tokenize(text)
-
-# Update config with vocab size
-config.vocab_size = vocab_size
-
-trainer = Trainer(
-    model_config=config,
-    train_data=train_data,
-    val_data=val_data,
-    learning_rate=3e-4
+# Create trainer instance
+trainer = GPTTrainer(
+    text_file="path/to/my_training_data.txt",
+    learning_rate=3e-4,
+    batch_size=64,
+    max_iters=5000,
+    eval_interval=500,
+    saved_path="path/to/save/model"
 )
 
-# Step 3: Start training
-trainer.train(max_epochs=10)
+# Start training
+trainer.trainer()  # This will automatically process text and train the model
 ```
 
 ### 3. Use Your Trained Model
 
 ```python
-import torch
-from createllm import GPTLanguageModel, ModelConfig
+from createllm import LLMModel
 
-# Load the trained model
-config = ModelConfig(
-    vocab_size=100,  # Replace with actual vocab size
-    n_embd=384,
-    block_size=256,
-    n_layer=4,
-    n_head=4,
-    dropout=0.2
-)
-
-model = GPTLanguageModel(config)
-model.load_state_dict(torch.load("path/to/saved_model/model.pt"))
-model.eval()
+# Load your trained model
+model = LLMModel("path/to/saved/model")
 
 # Generate text
-context = "Your prompt text"
-encoded_context = torch.tensor([processor.stoi[c] for c in context], dtype=torch.long).unsqueeze(0)
-generated = model.generate(encoded_context, max_new_tokens=100)
-decoded_text = ''.join([processor.itos[idx.item()] for idx in generated[0]])
-print("Generated Text:")
-print(decoded_text)
+generated_text = model.generate("Your prompt text")
+print(generated_text)
 ```
 
 ## 📝 Example Use Cases
 
 1. **Domain-Specific Documentation Generator**
 ```python
-trainer = Trainer(
-    model_config=config,
-    train_data="technical_docs.txt",
-    val_data="val_docs.txt"
+# Train on technical documentation
+trainer = GPTTrainer(
+    text_file="technical_docs.txt",
+    saved_path="tech_docs_model"
 )
-trainer.train(max_epochs=5)
+trainer.trainer()
 ```
 
 2. **Custom Writing Style Model**
 ```python
-trainer = Trainer(
-    model_config=config,
-    train_data="author_works.txt",
-    val_data="val_works.txt"
+# Train on specific author's works
+trainer = GPTTrainer(
+    text_file="author_works.txt",
+    saved_path="author_style_model"
 )
-trainer.train(max_epochs=10)
+trainer.trainer()
 ```
 
 3. **Specialized Content Generator**
 ```python
-trainer = Trainer(
-    model_config=config,
-    train_data="specialized_content.txt",
-    val_data="val_content.txt"
+# Train on specific content type
+trainer = GPTTrainer(
+    text_file="specialized_content.txt",
+    saved_path="content_model"
 )
-trainer.train(max_epochs=8)
+trainer.trainer()
 ```
 
 ## ⚙️ Model Configuration Options
@@ -157,10 +136,10 @@ config = ModelConfig(
 
 2. **Resource Management**
    ```python
-   trainer = Trainer(
+   trainer = GPTTrainer(
        batch_size=32,     # Reduce if running out of memory
-       max_epochs=5,      # Adjust based on resources
-       eval_interval=1    # Monitor training progress
+       max_iters=5000,    # Increase for better learning
+       eval_interval=500  # Monitor training progress
    )
    ```
 
@@ -172,8 +151,9 @@ config = ModelConfig(
 
 The training process provides real-time feedback:
 ```
-Epoch 1/10: Training Loss: 3.1675, Validation Loss: 3.1681
-Epoch 2/10: Training Loss: 2.4721, Validation Loss: 2.4759
+step 0: train loss 4.1675, val loss 4.1681
+step 500: train loss 2.4721, val loss 2.4759
+step 1000: train loss 1.9842, val loss 1.9873
 ...
 ```
 
@@ -182,9 +162,9 @@ Epoch 2/10: Training Loss: 2.4721, Validation Loss: 2.4759
 ```
 saved_model/
 ├── model.pt           # Model weights
-├── stoi.json          # Character-to-index mapping
-├── itos.json          # Index-to-character mapping
-└── config.json        # Model configuration
+├── encoder.pickle    # Text encoder
+├── decoder.pickle    # Text decoder
+└── config.json      # Model configuration
 ```
 
 ## ⚠️ Limitations
