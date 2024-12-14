@@ -16,6 +16,11 @@ If you don't have [pip](https://pip.pypa.io) installed, this [Python installatio
 
 To install createllm from sources, run this command in your terminal:
 
+Clone the repository and install manually:
+
+```bash
+git clone https://github.com/yourusername/createllm.git
+cd createllm
+pip install .
 ```
-pip install git+https://github.com/khushaljethava/createllm
-```
+    
