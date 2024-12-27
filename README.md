@@ -154,6 +154,7 @@ The training process provides real-time feedback:
 step 0: train loss 4.1675, val loss 4.1681
 step 500: train loss 2.4721, val loss 2.4759
 step 1000: train loss 1.9842, val loss 1.9873
+step 1500: train loss 1.1422, val loss 1.1422
 ...
 ```
 
