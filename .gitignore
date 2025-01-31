@@ -1,6 +1,5 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
-private/
 *.py[cod]
 *$py.class
 
@@ -14,7 +13,6 @@ build/
 develop-eggs/
 dist/
 downloads/
-private/
 eggs/
 .eggs/
 lib/
@@ -73,6 +71,9 @@ target/
 # Jupyter Notebook
 .ipynb_checkpoints
 
+# Dask worker cache
+dask-worker-space/
+
 # pyenv
 .python-version
 
@@ -105,3 +106,5 @@ ENV/
 
 # IDE settings
 .vscode/
+.idea/
+
