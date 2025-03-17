@@ -13,18 +13,27 @@ createllm allows you to:
 ## ✨ Key Features
 
 - 🔨 Build LLMs from scratch using your own text data
-- 🚀 Multi-threaded training for faster model development
-- 📊 Real-time training progress tracking
+- 🚀 Efficient training with OneCycleLR scheduler
+- 📊 Real-time training progress tracking with tqdm
 - 🎛️ Configurable model architecture
-- 💾 Easy model saving and loading
-- 🎯 Custom text generation capabilities
-- 📈 Built-in performance monitoring
+- 💾 Easy model checkpointing and loading
+- 🎯 Advanced text generation with temperature, top-k, and top-p sampling
+- 📈 Built-in validation and early stopping
+- 🔄 Automatic device selection (CPU/GPU)
 
 ## 📋 Requirements
 
 ```bash
-pip install torch torchvision tqdm dill
+pip install createllm
 ```
+
+The package requires:
+- Python >= 3.7
+- PyTorch >= 2.0.0
+- tqdm >= 4.65.0
+- numpy >= 1.24.0
+- dataclasses >= 0.6
+- typing-extensions >= 4.5.0
 
 ## 🚀 Quick Start Guide
 
@@ -43,42 +52,65 @@ my_training_data.txt
 ### 2. Train Your Custom LLM
 
 ```python
-from createllm import ModelConfig, GPTTrainer, TextFileProcessor
+from createllm import ModelConfig, TextFileProcessor, GPTLanguageModel, GPTTrainer
 
-# Initialize model configuration
+# Initialize text processor with your data file
+processor = TextFileProcessor("my_training_data.txt")
+text = processor.read_file()
+
+# Tokenize the text
+train_data, val_data, vocab_size, encode, decode = processor.tokenize(text)
+
+# Create model configuration
 config = ModelConfig(
-    vocab_size=None,  # Will be automatically set based on your data
+    vocab_size=vocab_size,
     n_embd=384,      # Embedding dimension
     block_size=256,  # Context window size
     n_layer=4,       # Number of transformer layers
-    n_head=4        # Number of attention heads
+    n_head=4,        # Number of attention heads
+    dropout=0.2      # Dropout rate
 )
 
-# Create trainer instance
+# Initialize the model
+model = GPTLanguageModel(config)
+print(f"Model initialized with {model.n_params / 1e6:.2f}M parameters")
+
+# Initialize the trainer
 trainer = GPTTrainer(
-    text_file="path/to/my_training_data.txt",
+    model=model,
+    train_data=train_data,
+    val_data=val_data,
+    config=config,
     learning_rate=3e-4,
     batch_size=64,
-    max_iters=5000,
-    eval_interval=500,
-    saved_path="path/to/save/model"
+    gradient_clip=1.0,
+    warmup_steps=1000
 )
 
-# Start training
-trainer.trainer()  # This will automatically process text and train the model
+# Train the model
+trainer.train(max_epochs=5, save_dir='checkpoints')
 ```
 
-### 3. Use Your Trained Model
+### 3. Generate Text with Your Trained Model
 
 ```python
-from createllm import LLMModel
-
-# Load your trained model
-model = LLMModel("path/to/saved/model")
-
 # Generate text
-generated_text = model.generate("Your prompt text")
-print(generated_text)
+context = "Once upon a time"
+context_tokens = encode(context)
+context_tensor = torch.tensor([context_tokens], dtype=torch.long).to(device)
+
+generated = model.generate(
+    context_tensor,
+    max_new_tokens=100,
+    temperature=0.8,
+    top_k=50,
+    top_p=0.9,
+    repetition_penalty=1.2
+)
+
+# Decode and print the generated text
+generated_text = decode(generated[0].tolist())
+print(f"\nGenerated text:\n{generated_text}")
 ```
 
 ## 📝 Example Use Cases
@@ -86,31 +118,27 @@ print(generated_text)
 1. **Domain-Specific Documentation Generator**
 ```python
 # Train on technical documentation
-trainer = GPTTrainer(
-    text_file="technical_docs.txt",
-    saved_path="tech_docs_model"
-)
-trainer.trainer()
+processor = TextFileProcessor("technical_docs.txt")
+text = processor.read_file()
+train_data, val_data, vocab_size, encode, decode = processor.tokenize(text)
+
+config = ModelConfig(vocab_size=vocab_size)
+model = GPTLanguageModel(config)
+trainer = GPTTrainer(model, train_data, val_data, config)
+trainer.train(max_epochs=5)
 ```
 
 2. **Custom Writing Style Model**
 ```python
 # Train on specific author's works
-trainer = GPTTrainer(
-    text_file="author_works.txt",
-    saved_path="author_style_model"
-)
-trainer.trainer()
-```
+processor = TextFileProcessor("author_works.txt")
+text = processor.read_file()
+train_data, val_data, vocab_size, encode, decode = processor.tokenize(text)
 
-3. **Specialized Content Generator**
-```python
-# Train on specific content type
-trainer = GPTTrainer(
-    text_file="specialized_content.txt",
-    saved_path="content_model"
-)
-trainer.trainer()
+config = ModelConfig(vocab_size=vocab_size)
+model = GPTLanguageModel(config)
+trainer = GPTTrainer(model, train_data, val_data, config)
+trainer.train(max_epochs=5)
 ```
 
 ## ⚙️ Model Configuration Options
@@ -119,11 +147,12 @@ Customize your model architecture based on your needs:
 
 ```python
 config = ModelConfig(
-    n_embd=384,     # Larger for more complex patterns
-    block_size=256, # Larger for longer context
-    n_layer=8,      # More layers for deeper understanding
-    n_head=8,       # More heads for better pattern recognition
-    dropout=0.2     # Adjust for overfitting prevention
+    vocab_size=vocab_size,  # Vocabulary size from tokenization
+    n_embd=384,            # Larger for more complex patterns
+    block_size=256,        # Larger for longer context
+    n_layer=4,             # More layers for deeper understanding
+    n_head=4,              # More heads for better pattern recognition
+    dropout=0.2            # Adjust for overfitting prevention
 )
 ```
 
@@ -137,9 +166,12 @@ config = ModelConfig(
 2. **Resource Management**
    ```python
    trainer = GPTTrainer(
+       model=model,
+       train_data=train_data,
+       val_data=val_data,
+       config=config,
        batch_size=32,     # Reduce if running out of memory
-       max_iters=5000,    # Increase for better learning
-       eval_interval=500  # Monitor training progress
+       learning_rate=3e-4 # Adjust based on your needs
    )
    ```
 
@@ -151,21 +183,20 @@ config = ModelConfig(
 
 The training process provides real-time feedback:
 ```
-step 0: train loss 4.1675, val loss 4.1681
-step 500: train loss 2.4721, val loss 2.4759
-step 1000: train loss 1.9842, val loss 1.9873
-step 1500: train loss 1.1422, val loss 1.1422
-...
+Epoch 1: Training Loss: 3.1342, Validation Loss: 4.3930
+Epoch 2: Training Loss: 2.3390, Validation Loss: 4.5054
+Epoch 3: Training Loss: 2.0413, Validation Loss: 4.5405
+Epoch 4: Training Loss: 1.9232, Validation Loss: 4.5442
+Epoch 5: Training Loss: 1.8738, Validation Loss: 4.5442
 ```
 
-## 📁 Saved Model Structure
+## 📁 Checkpoint Structure
 
 ```
-saved_model/
-├── model.pt           # Model weights
-├── encoder.pickle    # Text encoder
-├── decoder.pickle    # Text decoder
-└── config.json      # Model configuration
+checkpoints/
+├── checkpoint_epoch_0.pt  # Model checkpoint
+├── checkpoint_epoch_1.pt
+└── ...
 ```
 
 ## ⚠️ Limitations
@@ -173,6 +204,7 @@ saved_model/
 - Training requires significant computational resources
 - Model quality depends on training data quality
 - Larger models require more training time and resources
+- Text generation quality may vary based on training data size and quality
 
 ## 🤝 Contributing
 
