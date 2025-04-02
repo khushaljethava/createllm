@@ -22,6 +22,7 @@ jobs:
                   pip install --user --no-cache-dir Cython
                   pip install --user -r requirements.txt -r requirements_dev.txt
                   pip install --user codespell
+                  pip install --user mkdocs mkdocs-material
                   python setup.py install
 
             - name: Discover typos with codespell
@@ -30,5 +31,7 @@ jobs:
             - name: PKG-TEST
               run: |
                   python -m unittest discover tests/
-            - run: mkdocs gh-deploy --force
+            - name: Deploy documentation
+              run: |
+                  mkdocs gh-deploy --force
 
