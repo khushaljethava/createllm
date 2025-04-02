@@ -22,7 +22,7 @@ jobs:
                   pip install --user --no-cache-dir Cython
                   pip install --user -r requirements.txt -r requirements_dev.txt
                   pip install --user codespell
-                  pip install --user mkdocs mkdocs-material
+                  pip install --user sphinx sphinx-rtd-theme
                   python setup.py install
 
             - name: Discover typos with codespell
@@ -31,7 +31,13 @@ jobs:
             - name: PKG-TEST
               run: |
                   python -m unittest discover tests/
-            - name: Deploy documentation
+            - name: Build documentation
               run: |
-                  mkdocs gh-deploy --force
+                  cd docs
+                  make html
+            - name: Deploy documentation
+              uses: peaceiris/actions-gh-pages@v3
+              with:
+                  github_token: ${{ secrets.GITHUB_TOKEN }}
+                  publish_dir: ./docs/_build/html
 
