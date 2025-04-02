@@ -4,3 +4,4 @@ torchvision
 dill
 dataclasses
 tqdm
+pytest

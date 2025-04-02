@@ -1,11 +1,11 @@
 pip
 bump2version
 wheel
-watchdog
+watchdog    
 tox
 coverage
 Sphinx
 twine
 ruff
-
+pytest
 
