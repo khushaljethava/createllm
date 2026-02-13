@@ -37,7 +37,8 @@ dev = [
     "coverage",  # testing
     "mypy",  # linting
     "pytest",  # testing
-    "ruff"  # linting
+    "ruff",  # linting
+    "codespell"  # spelling
 ]
 
 [project.urls]
