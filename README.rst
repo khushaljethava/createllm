@@ -18,7 +18,9 @@ createllm allows you to:
 --------------
 
 * 🔨 Build LLMs from scratch using your own text data
-* 🚀 Efficient training with OneCycleLR scheduler
+* 🚀 Efficient training with OneCycleLR scheduler + gradient accumulation
+* ⚡ Faster attention with PyTorch scaled dot-product attention kernels
+* 🧠 Mixed precision training (AMP) support on CUDA
 * 📊 Real-time training progress tracking with tqdm
 * 🎛️ Configurable model architecture
 * 💾 Easy model checkpointing and loading
@@ -95,7 +97,9 @@ Place your training text in a file. The model learns from this text to generate 
         learning_rate=3e-4,
         batch_size=64,
         gradient_clip=1.0,
-        warmup_steps=1000
+        warmup_steps=1000,
+        accumulation_steps=2,
+        use_amp=True
     )
 
     # Train the model
@@ -253,3 +257,29 @@ This project is licensed under the MIT License.
 ----------------
 
 Based on the GPT architecture with modifications for custom training and ease of use.
+
+CLI Support
+-----------
+
+Train from terminal::
+
+    createllm train --input-file my_training_data.txt --save-dir checkpoints --max-epochs 5
+
+Resume training::
+
+    createllm train --input-file my_training_data.txt --save-dir checkpoints --max-epochs 10 --resume-from checkpoints/checkpoint_epoch_2.pt
+
+Generate text::
+
+    createllm generate --checkpoint checkpoints/checkpoint_epoch_4.pt --vocab-path checkpoints/vocab.pt --prompt "Once upon a time" --max-new-tokens 120
+
+
+Advanced Features Added
+-----------------------
+
+* Tokenizer options (`char` + `bpe` with fallback).
+* KV-cache generation (`use_cache=True`).
+* Advanced sampling controls (`min_p`, no-repeat n-gram, bad words, frequency/presence penalties).
+* LoRA adapters (`lora_r`) for efficient fine-tuning.
+* TensorBoard experiment logging and benchmark utility.
+* TorchScript/ONNX export helpers and FastAPI app factory.

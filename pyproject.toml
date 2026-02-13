@@ -72,3 +72,6 @@ module = "tests.*"
 allow_untyped_defs = true
 disable_error_code = "attr-defined"
 
+
+[project.scripts]
+createllm = "createllm.createllm:main"
