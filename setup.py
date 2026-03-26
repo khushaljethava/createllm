@@ -13,4 +13,5 @@ setup(
         "typing-extensions>=4.5.0"
     ],
     python_requires=">=3.7",
+    entry_points={"console_scripts": ["createllm=createllm.createllm:main"]},
 ) 

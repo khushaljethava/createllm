@@ -60,6 +60,7 @@ First, prepare your training data in a text file:
 .. code-block:: python
 
     from createllm import GPTLanguageModel, GPTTrainer
+    import torch
 
     # Initialize the model
     model = GPTLanguageModel(config)
@@ -74,7 +75,9 @@ First, prepare your training data in a text file:
         learning_rate=3e-4,
         batch_size=64,
         gradient_clip=1.0,
-        warmup_steps=1000
+        warmup_steps=1000,
+        accumulation_steps=2,
+        use_amp=True
     )
 
     # Train the model
@@ -102,6 +105,23 @@ First, prepare your training data in a text file:
     # Decode and print the generated text
     generated_text = decode(generated[0].tolist())
     print(f"\nGenerated text:\n{generated_text}")
+
+
+6. Save/Load Vocabulary for Reproducible Inference
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    # Save vocab after tokenization
+    processor.save_vocab("checkpoints/vocab.pt")
+
+    # Later: restore processor vocabulary
+    processor = TextFileProcessor("my_training_data.txt")
+    processor.load_vocab("checkpoints/vocab.pt")
+
+    # Use processor.encode()/decode() directly
+    ids = processor.encode("Hello")
+    text = processor.decode(ids)
 
 Advanced Usage
 ------------
@@ -154,7 +174,8 @@ Control text generation with various parameters:
         temperature=0.7,         # Lower temperature for more focused output
         top_k=40,               # Limit sampling to top 40 tokens
         top_p=0.95,             # Nucleus sampling threshold
-        repetition_penalty=1.5   # Stronger penalty for repetition
+        repetition_penalty=1.5,  # Stronger penalty for repetition
+        eos_token_id=3            # Optional: stop generation when EOS is sampled
     )
 
 4. Model Checkpointing
@@ -193,7 +214,7 @@ Best Practices
 ~~~~~~~~~~~~~~~~~
 
 * Use learning rate warmup
-* Monitor training and validation losses
+* Monitor training/validation loss and perplexity
 * Save best model checkpoints
 * Use early stopping if needed
 
@@ -273,3 +294,50 @@ If you need help:
   - Error messages
   - Expected behavior
   - Actual behavior
+
+5. CLI Workflow
+~~~~~~~~~~~~~~~
+
+.. code-block:: bash
+
+    # Train
+    createllm train --input-file my_training_data.txt --save-dir checkpoints --max-epochs 5
+
+    # Resume
+    createllm train --input-file my_training_data.txt --save-dir checkpoints --max-epochs 10 --resume-from checkpoints/checkpoint_epoch_2.pt
+
+    # Generate
+    createllm generate --checkpoint checkpoints/checkpoint_epoch_4.pt --vocab-path checkpoints/vocab.pt --prompt "Once upon a time" --max-new-tokens 120
+
+
+6. Advanced Smart Features
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    # BPE tokenizer if sentencepiece is installed; falls back to char otherwise
+    train_data, val_data, vocab_size, encode, decode = processor.tokenize(
+        text, tokenizer_type="bpe", bpe_vocab_size=2000
+    )
+
+    # Fast generation with KV-cache + advanced sampling controls
+    generated = model.generate(
+        context_tensor,
+        max_new_tokens=200,
+        use_cache=True,
+        min_p=0.05,
+        no_repeat_ngram_size=3,
+        bad_words_ids=[[1], [5, 9]],
+        frequency_penalty=0.2,
+        presence_penalty=0.2,
+    )
+
+    # LoRA-enabled model
+    config = ModelConfig(vocab_size=vocab_size, lora_r=8)
+
+    # TensorBoard logging
+    trainer = GPTTrainer(model, train_data, val_data, config, log_dir="runs/exp1")
+
+    # Export
+    model.export_torchscript("model.ts")
+

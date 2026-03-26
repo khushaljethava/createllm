@@ -37,7 +37,8 @@ dev = [
     "coverage",  # testing
     "mypy",  # linting
     "pytest",  # testing
-    "ruff"  # linting
+    "ruff",  # linting
+    "codespell"  # spelling
 ]
 
 [project.urls]
@@ -72,3 +73,6 @@ module = "tests.*"
 allow_untyped_defs = true
 disable_error_code = "attr-defined"
 
+
+[project.scripts]
+createllm = "createllm.createllm:main"

@@ -13,12 +13,14 @@ createllm allows you to:
 ## ✨ Key Features
 
 - 🔨 Build LLMs from scratch using your own text data
-- 🚀 Efficient training with OneCycleLR scheduler
+- 🚀 Efficient training with OneCycleLR scheduler + gradient accumulation
+- ⚡ Faster attention with PyTorch scaled dot-product attention kernels
+- 🧠 Mixed precision training (AMP) support on CUDA
 - 📊 Real-time training progress tracking with tqdm
 - 🎛️ Configurable model architecture
 - 💾 Easy model checkpointing and loading
 - 🎯 Advanced text generation with temperature, top-k, and top-p sampling
-- 📈 Built-in validation and early stopping
+- 📈 Built-in validation, perplexity tracking, and early stopping
 - 🔄 Automatic device selection (CPU/GPU)
 
 ## 📋 Requirements
@@ -53,6 +55,7 @@ my_training_data.txt
 
 ```python
 from createllm import ModelConfig, TextFileProcessor, GPTLanguageModel, GPTTrainer
+import torch
 
 # Initialize text processor with your data file
 processor = TextFileProcessor("my_training_data.txt")
@@ -84,7 +87,9 @@ trainer = GPTTrainer(
     learning_rate=3e-4,
     batch_size=64,
     gradient_clip=1.0,
-    warmup_steps=1000
+    warmup_steps=1000,
+    accumulation_steps=2,  # Effective larger batch size
+    use_amp=True           # Automatic mixed precision on GPU
 )
 
 # Train the model
@@ -112,6 +117,14 @@ generated = model.generate(
 generated_text = decode(generated[0].tolist())
 print(f"\nGenerated text:\n{generated_text}")
 ```
+
+
+## 🧠 Smarter & Safer Defaults
+
+- Validates invalid generation arguments (e.g., temperature <= 0, invalid top_p values)
+- Optional `eos_token_id` support for early stopping in generation
+- Explicit sequence-length guard in forward pass for clearer debugging
+- Vocabulary save/load helpers for reproducible inference pipelines
 
 ## 📝 Example Use Cases
 
@@ -221,3 +234,38 @@ This project is licensed under the MIT License.
 ## 🙏 Acknowledgments
 
 Based on the GPT architecture with modifications for custom training and ease of use.
+
+
+## 🖥️ CLI Support
+
+Train from terminal:
+
+```bash
+createllm train --input-file my_training_data.txt --save-dir checkpoints --max-epochs 5
+```
+
+Resume training from a checkpoint:
+
+```bash
+createllm train --input-file my_training_data.txt --save-dir checkpoints --max-epochs 10 --resume-from checkpoints/checkpoint_epoch_2.pt
+```
+
+Generate text from checkpoint + vocab:
+
+```bash
+createllm generate --checkpoint checkpoints/checkpoint_epoch_4.pt --vocab-path checkpoints/vocab.pt --prompt "Once upon a time" --max-new-tokens 120
+```
+
+
+
+## 🧩 Advanced Features Added
+
+- **Tokenizer options**: `tokenizer_type` supports `char` and `bpe` (SentencePiece if available, with char fallback).
+- **Faster generation**: optional KV-cache via `use_cache=True` in `generate()`.
+- **Large-corpus pipeline**: multi-file ingestion (`--input-glob`), streaming dataset utilities, and memory-mapped dataset class.
+- **Sampling controls**: `min_p`, no-repeat n-gram blocking, bad-word filtering, frequency/presence penalties.
+- **LoRA adapters**: optional low-rank adapters on attention projections (`lora_r` in `ModelConfig`).
+- **Experiment tracking**: TensorBoard logging hooks in `GPTTrainer(log_dir=...)`.
+- **Export/serving**: TorchScript/ONNX export helpers and FastAPI app factory.
+- **Benchmarking**: deterministic benchmark helper for generation throughput.
+
